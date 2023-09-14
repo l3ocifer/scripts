@@ -277,6 +277,24 @@ else
     echo "output.tf already exists. Skipping creation."
 fi
 
+# Fetch the ACM certificate ARN for the provided domain name
+CERT_ARN=$(aws acm list-certificates --query "CertificateSummaryList[?DomainName=='${DOMAIN_NAME}'].CertificateArn" --output text)
+
+# Check if we found the ACM certificate ARN
+if [[ -z "${CERT_ARN}" ]]; then
+    echo "Error: Unable to find an ACM certificate for the domain: $DOMAIN_NAME"
+    exit 1
+fi
+
+# Fetch hosted zone ID for the provided domain name
+ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='${DOMAIN_NAME}.'].Id" --output text | cut -d'/' -f3)
+
+# Check if we found the hosted zone ID
+if [[ -z "${ZONE_ID}" ]]; then
+    echo "Error: Unable to find a hosted zone for the domain: $DOMAIN_NAME"
+    exit 1
+fi
+
 # Check for existing main.tf file in the current directory
 if [ ! -f "./main.tf" ]
 then
@@ -286,27 +304,32 @@ provider "aws" {
   region = "us-east-1"
 }
 
-module "cloudfront_s3_website_with_domain" {
-    source                                  = "chgangaraju/cloudfront-s3-website/aws"
-    version                                 = "1.2.6"
-    hosted_zone                             = "$DOMAIN_NAME"
-    domain_name                             = "$DOMAIN_NAME"
-    acm_certificate_domain                  = "$DOMAIN_NAME"
-    cloudfront_geo_restriction_restriction_type = "none"
-    cloudfront_geo_restriction_locations    = ["US", "CA"]
+module "static_site" {
+  source = "USSBA/static-website/aws"
+  version = "~> 2.0"
+
+  domain_name = "$DOMAIN_NAME"
+  acm_certificate_arn = "$CERT_ARN"
+
+  # Optional configurations
+  hosted_zone_id = "$ZONE_ID"
+  default_subdirectory_object = "index.html"
+  hsts_header = "max-age=31536000"
 }
 EOF
     if [ $? -ne 0 ]
     then
-        handle_error "Failed to create main.tf"
+        echo "Error: Failed to create main.tf"
+        exit 1
     else
         # Initialize and run Terraform if main.tf was created
-        terraform init || handle_error "Failed to initialize Terraform"
-        terraform apply -auto-approve || handle_error "Failed to apply Terraform configuration"
+        terraform init || { echo "Error: Failed to initialize Terraform"; exit 1; }
+        terraform apply -auto-approve || { echo "Error: Failed to apply Terraform configuration"; exit 1; }
     fi
 else
     echo "main.tf already exists. Skipping creation."
 fi
+
 
 # Gather outputs for s3_bucket_name
 S3_BUCKET_NAME_CHECK=$(terraform output -raw s3_bucket_name 2>&1 | tail -n 1)
