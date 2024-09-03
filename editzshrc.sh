@@ -1,8 +1,8 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Prompt user for action
 echo "Add an (a)lias or (e)nvironment variable to .zshrc?"
-read -k 1 input < /dev/tty
+read -n 1 input < /dev/tty
 
 # If user selects 'a' for alias
 if [ "$input" = "a" ]; then
@@ -14,7 +14,7 @@ if [ "$input" = "a" ]; then
 
     # Append alias command to .zshrc
     new_alias="alias $alias_name='$alias_command'"
-    echo $new_alias >> ~/.zshrc
+    echo $new_alias >> ~/.bashrc
     echo -e "\nAlias created: $new_alias"
 
 # If user selects 'e' for environment variable
@@ -27,7 +27,7 @@ elif [ "$input" = "e" ]; then
 
     # Append export command to .zshrc
     new_export="export $var_name='$var_value'"
-    echo $new_export >> ~/.zshrc
+    echo $new_export >> ~/.bashrc
     echo -e "\nVariable exported: $new_export"
 
 else
@@ -36,6 +36,5 @@ else
 fi
 
 # Reload .zshrc file
-source ~/.zshrc
-echo -e "\nThe .zshrc file has been reloaded."
-
+source ~/.bashrc
+echo -e "\nThe .bashrc file has been reloaded."
