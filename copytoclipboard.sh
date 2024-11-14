@@ -5,9 +5,9 @@ append_to_temp_file() {
     local file_path="$1"
     local temp_file="$2"
 
-    # Validate file (ignore files starting with '.' or named 'LICENSE')
+    # Validate file (ignore files starting with '.', 'LICENSE', and common build artifacts)
     local filename=$(basename "$file_path")
-    if [[ "$filename" =~ ^\. || "$filename" == "LICENSE" ]]; then
+    if [[ "$filename" =~ ^\. || "$filename" == "LICENSE" || "$filename" =~ ^(yarn\.lock|package-lock\.json|node_modules|dist|build|.next|.cache|.*\.(jpg|jpeg|png|gif|bmp|tiff|ico|svg|webp|mp3|mp4|avi|mov|mkv|exe|dll|bin|iso|zip|tar\.gz|rar|7z|pdf|doc|docx|xls|xlsx|ppt|pptx))$ ]]; then
         echo "Skipping invalid file: $filename"
         return
     fi
@@ -28,12 +28,22 @@ process_directory() {
 
     # Include subdirectories if requested
     if [[ "$include_subdirs" == "yes" ]]; then
-        find "$dir_path" -type f -print0 | while IFS= read -r -d $'\0' file; do
+        find "$dir_path" -type f \( \
+            ! -path "*/.git/*" ! -path "*/.terraform/*" ! -path "*/node_modules/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" ! -path "*/.cache/*" \
+            ! -iname "*.jpg" ! -iname "*.jpeg" ! -iname "*.png" ! -iname "*.gif" ! -iname "*.bmp" ! -iname "*.tiff" ! -iname "*.ico" ! -iname "*.svg" ! -iname "*.webp" \
+            ! -iname "*.mp3" ! -iname "*.mp4" ! -iname "*.avi" ! -iname "*.mov" ! -iname "*.mkv" ! -iname "*.exe" ! -iname "*.dll" ! -iname "*.bin" ! -iname "*.iso" \
+            ! -iname "*.zip" ! -iname "*.tar.gz" ! -iname "*.rar" ! -iname "*.7z" ! -iname "*.pdf" ! -iname "*.doc" ! -iname "*.docx" ! -iname "*.xls" ! -iname "*.xlsx" \
+            ! -iname "*.ppt" ! -iname "*.pptx" \
+        \) -print0 | while IFS= read -r -d $'\0' file; do
             append_to_temp_file "$file" "$temp_file"
         done
     else
         for file in "$dir_path"/*; do
-            append_to_temp_file "$file" "$temp_file"
+            if [[ -d "$file" && "$file" =~ (.git|.terraform|node_modules|dist|build|.next|.cache) ]]; then
+                echo "Skipping directory: $(basename "$file")"
+            else
+                append_to_temp_file "$file" "$temp_file"
+            fi
         done
     fi
 }

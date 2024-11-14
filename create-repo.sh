@@ -6,6 +6,7 @@ read -p "Would you like to start the repo in the current directory using its exi
 if [[ "$use_current_dir_choice" == "y" || "$use_current_dir_choice" == "Y" ]]; then
     # Get the current directory's name without any leading periods
     repo_name=$(basename $(pwd) | sed 's/^\.//')
+    repo_visibility="public"  # Default to public for current directory
 else
     # Get the repository name from user input
     read -p "Enter a repository name: " repo_name
@@ -47,7 +48,7 @@ else
     done
 fi
 
-# Create the local repository
+# Initialize git repo
 git init
 
 # Check if "test.txt" exists. If not, create it.
@@ -58,7 +59,29 @@ fi
 git add .
 git commit -m "Initial commit"
 
-## Create a new repository on GitHub and push changes to it
-curl -u $GITHUB_USERNAME:$GITHUB_ACCESS_TOKEN https://api.github.com/user/repos -d '{"name":"'$repo_name'", "private":'$( [ "$repo_visibility" = "private" ] && echo 'true' || echo 'false')'}'
-git remote add origin https://github.com/$GITHUB_USERNAME/$repo_name.git
-git push -u origin master
+# Create repository on GitHub with error handling
+response=$(curl -s -w "%{http_code}" -u $GITHUB_USERNAME:$GITHUB_ACCESS_TOKEN https://api.github.com/user/repos -d '{"name":"'$repo_name'", "private":'$( [ "$repo_visibility" = "private" ] && echo 'true' || echo 'false')'}')
+http_code=${response: -3}
+if [[ $http_code -ne 201 ]]; then
+    echo "Failed to create GitHub repository. Status code: $http_code"
+    echo "Response: ${response:0:-3}"
+    exit 1
+fi
+
+# Add remote and verify it was added successfully
+if ! git remote add origin "https://github.com/$GITHUB_USERNAME/$repo_name.git"; then
+    echo "Failed to add remote origin"
+    exit 1
+fi
+
+# Push to master branch
+if ! git push -u origin master; then
+    # If first push fails, try creating master branch and pushing again
+    git checkout -b master
+    if ! git push -u origin master; then
+        echo "Failed to push to remote repository"
+        exit 1
+    fi
+fi
+
+echo "Repository successfully created and initialized at: https://github.com/$GITHUB_USERNAME/$repo_name"
