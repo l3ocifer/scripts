@@ -4,8 +4,8 @@
 # This script installs and configures common DevOps tools on Ubuntu/Debian
 # Last updated: 2024-11-13
 
-set -euo pipefail
-IFS=$'\n\t'
+# Initialize error collection
+declare -a FAILED_INSTALLATIONS=()
 
 # Function to log messages
 log() {
@@ -18,7 +18,8 @@ check_success() {
         log "✓ $1 completed successfully"
     else
         log "✗ Error during $1"
-        exit 1
+        FAILED_INSTALLATIONS+=("$1")
+        return 1
     fi
 }
 
@@ -29,36 +30,42 @@ command_exists() {
 
 # Create temporary directory for downloads
 TEMP_DIR=$(mktemp -d)
-cd "$TEMP_DIR"
-log "Working directory: $TEMP_DIR"
+cd "$TEMP_DIR" || exit 1
+log "Starting installations..."
 
 # Update system packages
 log "Updating system packages..."
-sudo apt-get update && sudo apt-get upgrade -y
+{
+    sudo apt-get update && sudo apt-get upgrade -y
+} >/dev/null 2>&1
 check_success "System update"
 
 # Install basic utilities
 log "Installing basic utilities..."
-sudo apt-get install -y \
-    git \
-    zip \
-    unzip \
-    jq \
-    curl \
-    wget \
-    apt-transport-https \
-    ca-certificates \
-    gnupg \
-    lsb-release \
-    software-properties-common
+{
+    sudo apt-get install -y \
+        git \
+        zip \
+        unzip \
+        jq \
+        curl \
+        wget \
+        apt-transport-https \
+        ca-certificates \
+        gnupg \
+        lsb-release \
+        software-properties-common
+} >/dev/null 2>&1
 check_success "Basic utilities installation"
 
 # Install Docker
 if ! command_exists docker; then
     log "Installing Docker..."
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    sudo usermod -aG docker "$USER"
+    {
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sudo sh get-docker.sh
+        sudo usermod -aG docker "$USER"
+    } >/dev/null 2>&1
     check_success "Docker installation"
 fi
 
@@ -77,14 +84,6 @@ if ! command_exists aws; then
     unzip -q awscliv2.zip
     sudo ./aws/install --update
     check_success "AWS CLI installation"
-fi
-
-# Install AWS IAM Authenticator
-if ! command_exists aws-iam-authenticator; then
-    log "Installing AWS IAM Authenticator..."
-    curl -fsSL "https://github.com/kubernetes-sigs/aws-iam-authenticator/releases/latest/download/aws-iam-authenticator_0.6.11_linux_amd64" -o aws-iam-authenticator
-    sudo install -o root -g root -m 0755 aws-iam-authenticator /usr/local/bin/aws-iam-authenticator
-    check_success "AWS IAM Authenticator installation"
 fi
 
 # Install kubectl
@@ -163,22 +162,61 @@ if ! command_exists terraform; then
     check_success "Terraform installation"
 fi
 
+# Install k9s - Kubernetes CLI To Manage Your Clusters In Style
+if ! command_exists k9s; then
+    log "Installing k9s..."
+    {
+        K9S_VERSION=$(curl -s https://api.github.com/repos/derailed/k9s/releases/latest | grep tag_name | cut -d '"' -f 4)
+        curl -fsSL "https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_amd64.tar.gz" -o k9s.tar.gz
+        tar xzf k9s.tar.gz
+        sudo install -o root -g root -m 0755 k9s /usr/local/bin/k9s
+    } >/dev/null 2>&1
+    check_success "k9s installation"
+fi
+
+# Install kubectx and kubens for better kubectl context management
+if ! command_exists kubectx; then
+    log "Installing kubectx and kubens..."
+    {
+        sudo git clone https://github.com/ahmetb/kubectx /opt/kubectx
+        sudo ln -s /opt/kubectx/kubectx /usr/local/bin/kubectx
+        sudo ln -s /opt/kubectx/kubens /usr/local/bin/kubens
+    } >/dev/null 2>&1
+    check_success "kubectx and kubens installation"
+fi
+
+# Install Lens IDE (if running with desktop environment)
+if [ -n "$DISPLAY" ]; then
+    log "Installing Lens..."
+    {
+        curl -fsSL https://downloads.k8slens.dev/keys/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/lens-archive-keyring.gpg > /dev/null
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/lens-archive-keyring.gpg] https://downloads.k8slens.dev/apt/debian stable main" | sudo tee /etc/apt/sources.list.d/lens.list > /dev/null
+        sudo apt-get update
+        sudo apt-get install -y lens
+    } >/dev/null 2>&1
+    check_success "Lens installation"
+fi
+
 # Cleanup
-cd - > /dev/null
+cd - > /dev/null || exit 1
 rm -rf "$TEMP_DIR"
 log "Cleaned up temporary files"
 
-# Final verification
-log "Verifying installations..."
-docker --version
-docker compose version
-aws --version
-aws-iam-authenticator version
-kubectl version --client
-eksctl version
-kind version
-helm version
-velero version --client-only
-terraform version
+# Final report
+log "Installation Summary:"
+if [ ${#FAILED_INSTALLATIONS[@]} -eq 0 ]; then
+    log "All installations completed successfully!"
+else
+    log "The following installations failed:"
+    printf '%s\n' "${FAILED_INSTALLATIONS[@]}"
+fi
+
+# Only show versions of successfully installed tools
+log "Installed tool versions:"
+for cmd in docker docker-compose aws aws-iam-authenticator kubectl eksctl kind helm velero terraform; do
+    if command_exists "$cmd"; then
+        $cmd --version 2>/dev/null || $cmd version 2>/dev/null || true
+    fi
+done
 
 log "Installation complete! Please log out and back in for all changes to take effect."
