@@ -137,7 +137,7 @@ deploy_webui() {
     # Remove existing container if it exists
     docker rm -f open-webui >/dev/null 2>&1
     
-    # Use host.docker.internal for non-Linux systems
+    # Use host networking for Linux systems
     if [[ "$IS_MACOS" == true ]] || [[ "$IS_WSL" == true ]]; then
         OLLAMA_HOST="host.docker.internal"
         EXTRA_ARGS="--add-host=host.docker.internal:host-gateway"
@@ -145,14 +145,13 @@ deploy_webui() {
         WEBUI_PORT="3000"
     else
         OLLAMA_HOST="localhost"
-        EXTRA_ARGS="--network ollama-network"
-        PORT_MAPPING="-p 8080:8080"
+        EXTRA_ARGS="--network host"
         WEBUI_PORT="8080"
     fi
     
     # Common environment variables with improved defaults
-    ENV_VARS="-e OLLAMA_API_BASE_URL=http://${OLLAMA_HOST}:11434/api \
-        -e OLLAMA_API_BASE_URL_BROWSER=http://localhost:11434/api \
+    ENV_VARS="-e OLLAMA_API_BASE_URL=http://${OLLAMA_HOST}:11434 \
+        -e OLLAMA_API_BASE_URL_BROWSER=http://localhost:11434 \
         -e AIOHTTP_CLIENT_TIMEOUT=300 \
         -e OLLAMA_ORIGINS=* \
         -e TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC") \
@@ -162,11 +161,21 @@ deploy_webui() {
         -e DEFAULT_MODEL=internlm2 \
         -e OLLAMA_MODEL_LIST=internlm2"
     
+    # Update model verification check
+    verify_webui_model_access() {
+        for i in {1..5}; do
+            if curl -s "http://localhost:${WEBUI_PORT}/api/v1/models" | grep -q "internlm2"; then
+                return 0
+            fi
+            sleep 2
+        done
+        return 1
+    }
+    
     if ! docker run -d \
         --name open-webui \
         --restart always \
         $EXTRA_ARGS \
-        $PORT_MAPPING \
         $DOCKER_GPU_ARGS \
         $CUDA_ENV \
         $ENV_VARS \
@@ -183,7 +192,13 @@ deploy_webui() {
     for i in {1..15}; do
         if curl -s "http://localhost:${WEBUI_PORT}" >/dev/null; then
             log "${GREEN}Open WebUI is ready${NC}"
-            return 0
+            if verify_webui_model_access; then
+                log "${GREEN}Models are accessible in WebUI${NC}"
+                return 0
+            else
+                log "${RED}Models not accessible in WebUI. Check Ollama API connection${NC}"
+                return 1
+            fi
         fi
         log "${YELLOW}Waiting for Open WebUI to start (attempt $i/15)...${NC}"
         sleep 2
@@ -311,16 +326,6 @@ fi
 if ! deploy_webui; then
     log "${RED}Failed to deploy Open WebUI. Check the logs above for details${NC}"
     exit 1
-fi
-
-# Add model verification check after WebUI deployment
-if [ $? -eq 0 ]; then
-    log "${BLUE}Verifying model accessibility...${NC}"
-    if curl -s "http://localhost:${WEBUI_PORT}/api/v1/models" | grep -q "internlm2"; then
-        log "${GREEN}Models are accessible in WebUI${NC}"
-    else
-        log "${RED}Models not accessible in WebUI. Check Ollama API connection${NC}"
-    fi
 fi
 
 # Check if running via SSH and provide instructions
