@@ -237,24 +237,28 @@ verify_model_installation() {
         return 0
     fi
     
-    # Start the model if not running
-    log "${BLUE}Starting model $model...${NC}"
-    ollama run $model "hello" >/dev/null 2>&1 &
-    local pid=$!
+    # Try to load the model
+    log "${BLUE}Loading model $model...${NC}"
+    if ! timeout 120 ollama run $model "test" >/dev/null 2>&1; then
+        log "${YELLOW}Initial load failed, attempting alternative load method...${NC}"
+        # Try alternative loading method with explicit parameters
+        if ! timeout 120 curl -s "http://localhost:11434/api/generate" -d "{\"model\":\"$model\",\"prompt\":\"test\",\"stream\":false}" >/dev/null; then
+            log "${RED}Failed to load model $model${NC}"
+            return 1
+        fi
+    fi
     
-    # Wait for model to be running and loaded
-    for i in {1..10}; do
+    # Verify model is now running
+    for i in {1..5}; do
         if ollama ps | grep -q "^$model" && \
-           curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" | grep -q "\"status\":\"loaded\""; then
-            log "${GREEN}Model $model is now loaded and running${NC}"
+           curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" | grep -q "\"status\":\"ready\""; then
+            log "${GREEN}Model $model is loaded and running${NC}"
             return 0
         fi
-        sleep 2
+        sleep 5
     done
     
-    # Kill the background process if it failed
-    kill $pid 2>/dev/null
-    log "${RED}Failed to start model $model${NC}"
+    log "${RED}Model $model failed to start properly${NC}"
     return 1
 }
 
