@@ -230,7 +230,7 @@ install_ollama
 wait_for_ollama
 
 # Pull required models
-MODELS=("llama2" "codellama" "mistral")
+MODELS=("llama3.2:3b" "qwen2.5-coder:32b" "internlm2")
 for model in "${MODELS[@]}"; do
     if ! ollama list | grep -q "^$model\s"; then
         log "${BLUE}Pulling $model model...${NC}"
