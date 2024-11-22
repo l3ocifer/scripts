@@ -111,7 +111,7 @@ run_webui() {
     docker run -d \
         --name open-webui \
         --restart always \
-        --network host \
+        --add-host host.docker.internal:host-gateway \
         -p 3000:8080 \
         -e OLLAMA_API_BASE_URL="$desired_url" \
         -v open-webui:/app/backend/data \
@@ -123,7 +123,7 @@ if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
     # Get current configuration
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
-    DESIRED_URL="http://localhost:11434/api"
+    DESIRED_URL="http://host.docker.internal:11434/api"
     
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
         log "${BLUE}Creating new container with updated configuration...${NC}"
@@ -132,7 +132,7 @@ if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
         docker run -d \
             --name "$TEMP_NAME" \
             --restart always \
-            --network host \
+            --add-host host.docker.internal:host-gateway \
             -p 3000:8080 \
             -e OLLAMA_API_BASE_URL="$DESIRED_URL" \
             -v open-webui:/app/backend/data \
@@ -166,7 +166,7 @@ if docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
     if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
         LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
         log "${GREEN}To access Open WebUI from your local machine, run:${NC}"
-        log "${BLUE}ssh -L 3000:localhost:3000 $(whoami)@$LOCAL_IP${NC}"
+        log "${BLUE}ssh -L 3000:localhost:3000 -L 11434:localhost:11434 $(whoami)@$LOCAL_IP${NC}"
         log "${GREEN}Then open http://localhost:3000 in your browser${NC}"
     else
         log "${GREEN}Web interface available at http://localhost:3000${NC}"
