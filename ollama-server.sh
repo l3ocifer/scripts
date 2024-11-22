@@ -4,6 +4,7 @@
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Function to log with timestamp
@@ -76,6 +77,76 @@ if ! model_exists "qwen2.5-coder:32b"; then
     ollama pull qwen2.5-coder:32b
 else
     log "${GREEN}Qwen 2.5 Coder 32B model already exists${NC}"
+fi
+
+# Check if Docker is installed and running
+if command -v docker >/dev/null 2>&1; then
+    log "${GREEN}Docker is already installed${NC}"
+    # Ensure Docker service is running
+    if ! systemctl is-active --quiet docker; then
+        log "${BLUE}Starting Docker service...${NC}"
+        sudo systemctl start docker
+        sleep 3
+    fi
+else
+    log "${BLUE}Installing Docker...${NC}"
+    curl -fsSL https://get.docker.com | sh
+    sudo usermod -aG docker $USER
+    sudo systemctl enable docker
+    sudo systemctl start docker
+    sleep 3
+    log "${YELLOW}Please log out and back in for Docker permissions to take effect${NC}"
+fi
+
+# Ensure Ollama is running before starting Open WebUI
+if ! sudo systemctl is-active --quiet ollama; then
+    log "${BLUE}Starting Ollama service...${NC}"
+    sudo systemctl restart ollama
+    sleep 5
+fi
+
+# Check if Open WebUI container exists and is properly configured
+if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
+    log "${GREEN}Open WebUI container exists${NC}"
+    # Get current API URL
+    CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
+    # Get desired API URL
+    LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+    DESIRED_URL="http://${LOCAL_IP:-localhost}:11434/api"
+    
+    # Recreate if URL needs updating
+    if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
+        log "${BLUE}Updating Open WebUI configuration...${NC}"
+        docker rm -f open-webui >/dev/null 2>&1
+        docker run -d \
+            --name open-webui \
+            --restart always \
+            -p 3000:8080 \
+            -e OLLAMA_API_BASE_URL="$DESIRED_URL" \
+            -v open-webui:/app/backend/data \
+            ghcr.io/open-webui/open-webui:main
+    elif ! docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
+        log "${BLUE}Starting existing Open WebUI container...${NC}"
+        docker start open-webui
+    fi
+else
+    log "${BLUE}Installing Open WebUI...${NC}"
+    LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+    docker run -d \
+        --name open-webui \
+        --restart always \
+        -p 3000:8080 \
+        -e OLLAMA_API_BASE_URL="http://${LOCAL_IP:-localhost}:11434/api" \
+        -v open-webui:/app/backend/data \
+        ghcr.io/open-webui/open-webui:main
+fi
+
+# Check Open WebUI status
+if docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
+    log "${GREEN}Open WebUI is running successfully${NC}"
+    log "${GREEN}Web interface available at http://localhost:3000${NC}"
+else
+    log "${RED}Failed to start Open WebUI container. Check logs with: docker logs open-webui${NC}"
 fi
 
 # Enable and ensure service is running
