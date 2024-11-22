@@ -141,27 +141,10 @@ deploy_webui() {
         PORT_MAPPING="-p 3000:8080"
         WEBUI_PORT="3000"
     else
-        # Try network=host first, then fallback to ollama-network if it fails
-        if docker run --rm --network=host busybox ping -c 1 localhost >/dev/null 2>&1; then
-            OLLAMA_HOST="127.0.0.1"
-            EXTRA_ARGS="--network=host"
-            PORT_MAPPING=""
-            WEBUI_PORT="8080"
-        else
-            OLLAMA_HOST="localhost"
-            EXTRA_ARGS="--network ollama-network"
-            PORT_MAPPING="-p 3000:8080"
-            WEBUI_PORT="3000"
-        fi
-    fi
-    
-    # Select appropriate image tag and environment variables
-    if [[ -n "$DOCKER_GPU_ARGS" ]]; then
-        IMAGE_TAG="cuda"
-        CUDA_ENV="-e NVIDIA_VISIBLE_DEVICES=all -e USE_CUDA_DOCKER=true -e NVIDIA_DRIVER_CAPABILITIES=compute,utility"
-    else
-        IMAGE_TAG="main"
-        CUDA_ENV=""
+        OLLAMA_HOST="localhost"
+        EXTRA_ARGS="--network ollama-network"
+        PORT_MAPPING="-p 8080:8080"
+        WEBUI_PORT="8080"
     fi
     
     # Common environment variables with improved defaults
@@ -172,7 +155,8 @@ deploy_webui() {
         -e TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC") \
         -e RESET_CONFIG_ON_START=false \
         -e OLLAMA_MODELS_PATH=/root/.ollama/models \
-        -e OLLAMA_TIMEOUT=300"
+        -e OLLAMA_TIMEOUT=300 \
+        -e DEFAULT_MODEL=internlm2"
     
     if ! docker run -d \
         --name open-webui \
