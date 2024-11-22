@@ -198,9 +198,13 @@ wait_for_ollama() {
     for i in {1..30}; do
         if curl -s http://localhost:11434/api/version >/dev/null; then
             log "${GREEN}Ollama API is ready${NC}"
-            # Verify Ollama is serving models
-            if ollama ps >/dev/null 2>&1; then
+            # Check running models
+            if running_models=$(ollama ps 2>/dev/null); then
                 log "${GREEN}Ollama is serving models${NC}"
+                if [ -n "$running_models" ]; then
+                    log "${BLUE}Currently running models:${NC}"
+                    echo "$running_models"
+                fi
                 return 0
             fi
         fi
@@ -222,36 +226,36 @@ verify_model_installation() {
     log "${BLUE}Verifying model: $model${NC}"
     
     # Check if model exists in Ollama
-    if ! ollama list | grep -q "^$model\s"; then
+    if ! ollama list | grep -q "^$model"; then
         log "${RED}Model $model not found in Ollama list${NC}"
         return 1
     fi
     
-    # Check if model is running
-    if ! ollama ps | grep -q "^$model\s"; then
-        log "${YELLOW}Model $model not running, attempting to start...${NC}"
-        # Try to start the model
-        if ! ollama run $model "test" >/dev/null 2>&1; then
-            log "${RED}Failed to start model $model${NC}"
-            return 1
-        fi
-    fi
-    
-    # Verify model can be loaded
-    if ! curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" >/dev/null; then
-        log "${RED}Model $model failed to load${NC}"
-        return 1
-    fi
-    
-    # Check model files in Docker volume
-    if docker run --rm -v ollama:/root/.ollama \
-        busybox ls -l /root/.ollama/models | grep -q "$model"; then
-        log "${GREEN}Model $model found in Docker volume and running${NC}"
+    # Check if model is already running
+    if ollama ps | grep -q "^$model"; then
+        log "${GREEN}Model $model is already running${NC}"
         return 0
-    else
-        log "${RED}Model $model not found in Docker volume${NC}"
-        return 1
     fi
+    
+    # Start the model if not running
+    log "${BLUE}Starting model $model...${NC}"
+    ollama run $model "hello" >/dev/null 2>&1 &
+    local pid=$!
+    
+    # Wait for model to be running and loaded
+    for i in {1..10}; do
+        if ollama ps | grep -q "^$model" && \
+           curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" | grep -q "\"status\":\"loaded\""; then
+            log "${GREEN}Model $model is now loaded and running${NC}"
+            return 0
+        fi
+        sleep 2
+    done
+    
+    # Kill the background process if it failed
+    kill $pid 2>/dev/null
+    log "${RED}Failed to start model $model${NC}"
+    return 1
 }
 
 # Main installation process
@@ -264,12 +268,14 @@ wait_for_ollama
 # Pull required models
 MODELS=("internlm2")  # Simplified model list for testing
 for model in "${MODELS[@]}"; do
-    if ! ollama list | grep -q "^$model\s"; then
+    if ! ollama list | grep -q "^$model"; then
         log "${BLUE}Pulling $model model...${NC}"
         if ! ollama pull $model; then
             log "${RED}Failed to pull $model model${NC}"
             continue
         fi
+        # Wait for model to be registered after pulling
+        sleep 5
     fi
     
     # Verify model installation
