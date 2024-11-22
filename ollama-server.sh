@@ -107,12 +107,13 @@ fi
 
 # Function to run Open WebUI container
 run_webui() {
+    local desired_url="$1"
     docker run -d \
         --name open-webui \
         --restart always \
         --network host \
         -p 3000:8080 \
-        -e OLLAMA_API_BASE_URL="http://localhost:11434/api" \
+        -e OLLAMA_API_BASE_URL="$desired_url" \
         -v open-webui:/app/backend/data \
         ghcr.io/open-webui/open-webui:main
 }
@@ -120,22 +121,41 @@ run_webui() {
 # Check if Open WebUI container exists and is properly configured
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
-    # Get current API URL
+    # Get current configuration
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
     DESIRED_URL="http://localhost:11434/api"
     
-    # Recreate if URL needs updating
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
-        log "${BLUE}Updating Open WebUI configuration...${NC}"
-        docker rm -f open-webui >/dev/null 2>&1
-        run_webui
+        log "${BLUE}Creating new container with updated configuration...${NC}"
+        # Create new container without removing the old one first
+        TEMP_NAME="open-webui-new"
+        docker run -d \
+            --name "$TEMP_NAME" \
+            --restart always \
+            --network host \
+            -p 3000:8080 \
+            -e OLLAMA_API_BASE_URL="$DESIRED_URL" \
+            -v open-webui:/app/backend/data \
+            ghcr.io/open-webui/open-webui:main
+
+        # If new container starts successfully, remove the old one
+        if docker ps --format '{{.Names}}' | grep -q "^$TEMP_NAME$"; then
+            docker rm -f open-webui >/dev/null 2>&1
+            docker rename "$TEMP_NAME" open-webui
+            log "${GREEN}Successfully updated Open WebUI configuration${NC}"
+        else
+            log "${RED}Failed to create new container, keeping existing one${NC}"
+            docker rm -f "$TEMP_NAME" >/dev/null 2>&1
+        fi
     elif ! docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
         log "${BLUE}Starting existing Open WebUI container...${NC}"
         docker start open-webui
+    else
+        log "${GREEN}Open WebUI container is already running with correct configuration${NC}"
     fi
 else
     log "${BLUE}Installing Open WebUI...${NC}"
-    run_webui
+    run_webui "http://localhost:11434/api"
 fi
 
 # Check Open WebUI status and provide access instructions
