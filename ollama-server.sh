@@ -178,7 +178,7 @@ deploy_webui() {
         --name open-webui \
         --restart always \
         $EXTRA_ARGS \
-        ${PORT_MAPPING:-"-p 3000:8080"} \
+        $PORT_MAPPING \
         $DOCKER_GPU_ARGS \
         $CUDA_ENV \
         $ENV_VARS \
