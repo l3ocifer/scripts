@@ -102,44 +102,48 @@ fi
 if ! sudo systemctl is-active --quiet ollama; then
     log "${BLUE}Starting Ollama service...${NC}"
     sudo systemctl restart ollama
-    sleep 5
+    # Increase wait time to ensure API is fully ready
+    for i in {1..10}; do
+        if curl -s http://localhost:11434/api/version >/dev/null; then
+            break
+        fi
+        sleep 1
+    done
 fi
 
 # Function to run Open WebUI container
 run_webui() {
     local desired_url="$1"
+    local container_name="$2"
     docker run -d \
-        --name open-webui \
+        --name "$container_name" \
         --restart always \
-        --add-host host.docker.internal:host-gateway \
+        --add-host=host.docker.internal:host-gateway \
         -p 3000:8080 \
         -e OLLAMA_API_BASE_URL="$desired_url" \
         -v open-webui:/app/backend/data \
         ghcr.io/open-webui/open-webui:main
+
+    # Wait for container to be ready
+    for i in {1..10}; do
+        if docker logs "$container_name" 2>&1 | grep -q "Application startup complete"; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
 }
 
 # Check if Open WebUI container exists and is properly configured
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
-    # Get current configuration
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
     DESIRED_URL="http://host.docker.internal:11434/api"
     
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
         log "${BLUE}Creating new container with updated configuration...${NC}"
-        # Create new container without removing the old one first
         TEMP_NAME="open-webui-new"
-        docker run -d \
-            --name "$TEMP_NAME" \
-            --restart always \
-            --add-host host.docker.internal:host-gateway \
-            -p 3000:8080 \
-            -e OLLAMA_API_BASE_URL="$DESIRED_URL" \
-            -v open-webui:/app/backend/data \
-            ghcr.io/open-webui/open-webui:main
-
-        # If new container starts successfully, remove the old one
-        if docker ps --format '{{.Names}}' | grep -q "^$TEMP_NAME$"; then
+        if run_webui "$DESIRED_URL" "$TEMP_NAME"; then
             docker rm -f open-webui >/dev/null 2>&1
             docker rename "$TEMP_NAME" open-webui
             log "${GREEN}Successfully updated Open WebUI configuration${NC}"
@@ -150,12 +154,10 @@ if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     elif ! docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
         log "${BLUE}Starting existing Open WebUI container...${NC}"
         docker start open-webui
-    else
-        log "${GREEN}Open WebUI container is already running with correct configuration${NC}"
     fi
 else
     log "${BLUE}Installing Open WebUI...${NC}"
-    run_webui "http://localhost:11434/api"
+    run_webui "http://host.docker.internal:11434/api" "open-webui"
 fi
 
 # Check Open WebUI status and provide access instructions
