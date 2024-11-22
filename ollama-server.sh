@@ -59,6 +59,24 @@ for logfile in /var/log/ollama.log /var/log/ollama.error.log; do
     fi
 done
 
+# Ensure Ollama service is properly configured and running
+log "${BLUE}Configuring Ollama service...${NC}"
+sudo systemctl daemon-reload
+sudo systemctl enable ollama
+
+# Restart service if not running or if config changed
+if ! sudo systemctl is-active --quiet ollama || [ -n "$SERVICE_UPDATED" ]; then
+    log "${BLUE}Starting Ollama service...${NC}"
+    sudo systemctl restart ollama
+    # Wait for Ollama API to be fully ready
+    for i in {1..30}; do
+        if curl -s http://localhost:11434/api/version >/dev/null; then
+            break
+        fi
+        sleep 2
+    done
+fi
+
 # Function to check if model exists
 model_exists() {
     ollama list | grep -q "^$1\s"
@@ -99,23 +117,37 @@ else
     log "${YELLOW}Please log out and back in for Docker permissions to take effect${NC}"
 fi
 
-# Ensure Ollama is running before starting Open WebUI
-if ! sudo systemctl is-active --quiet ollama; then
-    log "${BLUE}Starting Ollama service...${NC}"
-    sudo systemctl restart ollama
-    # Increase wait time to ensure API is fully ready
-    for i in {1..10}; do
-        if curl -s http://localhost:11434/api/version >/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-fi
-
 # Function to run Open WebUI container
 run_webui() {
     local desired_url="$1"
     local container_name="$2"
+    
+    # Check if container exists and is running correctly
+    if docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        CURRENT_URL=$(docker inspect "$container_name" | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
+        if [[ "$CURRENT_URL" == *"$desired_url"* ]] && \
+           curl -s "http://localhost:3000" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    
+    # Remove existing container if it exists
+    docker rm -f "$container_name" >/dev/null 2>&1
+    
+    # Wait for Ollama API to be accessible
+    for i in {1..10}; do
+        if curl -s "$desired_url/version" >/dev/null; then
+            break
+        fi
+        sleep 2
+    done
+
+    # Only proceed if API is accessible
+    if ! curl -s "$desired_url/version" >/dev/null; then
+        log "${RED}Ollama API not accessible at $desired_url${NC}"
+        return 1
+    fi
+    
     docker run -d \
         --name "$container_name" \
         --restart always \
@@ -125,39 +157,37 @@ run_webui() {
         ghcr.io/open-webui/open-webui:main
 
     # Wait for container to be ready
-    for i in {1..10}; do
-        if docker logs "$container_name" 2>&1 | grep -q "Application startup complete"; then
+    for i in {1..15}; do
+        if docker logs "$container_name" 2>&1 | grep -q "Application startup complete" && \
+           curl -s "http://localhost:3000" >/dev/null 2>&1; then
             return 0
         fi
-        sleep 1
+        sleep 2
     done
     return 1
 }
 
-# Check if Open WebUI container exists and is properly configured
+# Update container check section
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
     DESIRED_URL="http://localhost:11434/api"
     
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
-        log "${BLUE}Creating new container with updated configuration...${NC}"
-        TEMP_NAME="open-webui-new"
-        if run_webui "$DESIRED_URL" "$TEMP_NAME"; then
-            docker rm -f open-webui >/dev/null 2>&1
-            docker rename "$TEMP_NAME" open-webui
+        log "${BLUE}Recreating container with updated configuration...${NC}"
+        if run_webui "$DESIRED_URL" "open-webui"; then
             log "${GREEN}Successfully updated Open WebUI configuration${NC}"
         else
-            log "${RED}Failed to create new container, keeping existing one${NC}"
-            docker rm -f "$TEMP_NAME" >/dev/null 2>&1
+            log "${RED}Failed to create container. Check logs with: docker logs open-webui${NC}"
+            exit 1
         fi
-    elif ! docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
-        log "${BLUE}Starting existing Open WebUI container...${NC}"
-        docker start open-webui
     fi
 else
     log "${BLUE}Installing Open WebUI...${NC}"
-    run_webui "http://localhost:11434/api" "open-webui"
+    if ! run_webui "http://localhost:11434/api" "open-webui"; then
+        log "${RED}Failed to create container. Check logs with: docker logs open-webui${NC}"
+        exit 1
+    fi
 fi
 
 # Check Open WebUI status and provide access instructions
@@ -175,24 +205,4 @@ if docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
     fi
 else
     log "${RED}Failed to start Open WebUI container. Check logs with: docker logs open-webui${NC}"
-fi
-
-# Enable and ensure service is running
-log "${BLUE}Ensuring Ollama service is enabled and running...${NC}"
-sudo systemctl daemon-reload
-sudo systemctl enable ollama
-if ! sudo systemctl is-active --quiet ollama; then
-    sudo systemctl restart ollama
-    sleep 5
-fi
-
-# Check service status
-if sudo systemctl is-active --quiet ollama; then
-    log "${GREEN}Ollama service is running successfully${NC}"
-    log "${GREEN}API endpoint available at http://localhost:11434${NC}"
-    log "${GREEN}Test the API with: curl http://localhost:11434/api/generate -d '{\"model\":\"llama3.2:3b\",\"prompt\":\"Why is the sky blue?\"}'${NC}"
-    log "${GREEN}Or with Qwen: curl http://localhost:11434/api/generate -d '{\"model\":\"qwen2.5-coder:32b\",\"prompt\":\"Write a Python function to calculate Fibonacci numbers\"}'${NC}"
-else
-    log "${RED}Failed to start Ollama service. Check logs with: sudo journalctl -u ollama${NC}"
-    exit 1
 fi 
