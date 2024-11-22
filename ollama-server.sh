@@ -156,10 +156,11 @@ deploy_webui() {
         -e AIOHTTP_CLIENT_TIMEOUT=300 \
         -e OLLAMA_ORIGINS=* \
         -e TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC") \
-        -e RESET_CONFIG_ON_START=false \
+        -e RESET_CONFIG_ON_START=true \
         -e OLLAMA_MODELS_PATH=/root/.ollama/models \
         -e OLLAMA_TIMEOUT=300 \
-        -e DEFAULT_MODEL=internlm2"
+        -e DEFAULT_MODEL=internlm2 \
+        -e OLLAMA_MODEL_LIST=internlm2"
     
     if ! docker run -d \
         --name open-webui \
@@ -197,16 +198,60 @@ wait_for_ollama() {
     for i in {1..30}; do
         if curl -s http://localhost:11434/api/version >/dev/null; then
             log "${GREEN}Ollama API is ready${NC}"
-            # Verify model pulling capability
-            if ollama list >/dev/null 2>&1; then
+            # Verify Ollama is serving models
+            if ollama ps >/dev/null 2>&1; then
+                log "${GREEN}Ollama is serving models${NC}"
                 return 0
             fi
+        fi
+        if ! pgrep -x "ollama" >/dev/null; then
+            log "${YELLOW}Ollama process not found, starting ollama serve...${NC}"
+            ollama serve >/dev/null 2>&1 &
+            sleep 5
         fi
         log "${YELLOW}Waiting for Ollama API (attempt $i/30)...${NC}"
         sleep 2
     done
     log "${RED}Ollama API failed to respond after 60 seconds${NC}"
     return 1
+}
+
+# Update verify_model_installation function
+verify_model_installation() {
+    local model=$1
+    log "${BLUE}Verifying model: $model${NC}"
+    
+    # Check if model exists in Ollama
+    if ! ollama list | grep -q "^$model\s"; then
+        log "${RED}Model $model not found in Ollama list${NC}"
+        return 1
+    fi
+    
+    # Check if model is running
+    if ! ollama ps | grep -q "^$model\s"; then
+        log "${YELLOW}Model $model not running, attempting to start...${NC}"
+        # Try to start the model
+        if ! ollama run $model "test" >/dev/null 2>&1; then
+            log "${RED}Failed to start model $model${NC}"
+            return 1
+        fi
+    fi
+    
+    # Verify model can be loaded
+    if ! curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" >/dev/null; then
+        log "${RED}Model $model failed to load${NC}"
+        return 1
+    fi
+    
+    # Check model files in Docker volume
+    if docker run --rm -v ollama:/root/.ollama \
+        busybox ls -l /root/.ollama/models | grep -q "$model"; then
+        log "${GREEN}Model $model found in Docker volume and running${NC}"
+        return 0
+    else
+        log "${RED}Model $model not found in Docker volume${NC}"
+        return 1
+    fi
 }
 
 # Main installation process
@@ -217,7 +262,7 @@ install_ollama
 wait_for_ollama
 
 # Pull required models
-MODELS=("llama3.2:3b" "qwen2.5-coder:32b" "internlm2")
+MODELS=("internlm2")  # Simplified model list for testing
 for model in "${MODELS[@]}"; do
     if ! ollama list | grep -q "^$model\s"; then
         log "${BLUE}Pulling $model model...${NC}"
@@ -225,6 +270,12 @@ for model in "${MODELS[@]}"; do
             log "${RED}Failed to pull $model model${NC}"
             continue
         fi
+    fi
+    
+    # Verify model installation
+    if ! verify_model_installation "$model"; then
+        log "${RED}Model $model verification failed${NC}"
+        continue
     fi
 done
 
@@ -250,6 +301,16 @@ fi
 if ! deploy_webui; then
     log "${RED}Failed to deploy Open WebUI. Check the logs above for details${NC}"
     exit 1
+fi
+
+# Add model verification check after WebUI deployment
+if [ $? -eq 0 ]; then
+    log "${BLUE}Verifying model accessibility...${NC}"
+    if curl -s "http://localhost:${WEBUI_PORT}/api/v1/models" | grep -q "internlm2"; then
+        log "${GREEN}Models are accessible in WebUI${NC}"
+    else
+        log "${RED}Models not accessible in WebUI. Check Ollama API connection${NC}"
+    fi
 fi
 
 # Check if running via SSH and provide instructions
