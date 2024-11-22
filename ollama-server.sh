@@ -105,40 +105,37 @@ if ! sudo systemctl is-active --quiet ollama; then
     sleep 5
 fi
 
+# Function to run Open WebUI container
+run_webui() {
+    docker run -d \
+        --name open-webui \
+        --restart always \
+        --network host \
+        -p 3000:8080 \
+        -e OLLAMA_API_BASE_URL="http://localhost:11434/api" \
+        -v open-webui:/app/backend/data \
+        ghcr.io/open-webui/open-webui:main
+}
+
 # Check if Open WebUI container exists and is properly configured
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
     # Get current API URL
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
-    # Get desired API URL
-    LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
-    DESIRED_URL="http://${LOCAL_IP:-localhost}:11434/api"
+    DESIRED_URL="http://localhost:11434/api"
     
     # Recreate if URL needs updating
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
         log "${BLUE}Updating Open WebUI configuration...${NC}"
         docker rm -f open-webui >/dev/null 2>&1
-        docker run -d \
-            --name open-webui \
-            --restart always \
-            -p 3000:8080 \
-            -e OLLAMA_API_BASE_URL="$DESIRED_URL" \
-            -v open-webui:/app/backend/data \
-            ghcr.io/open-webui/open-webui:main
+        run_webui
     elif ! docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
         log "${BLUE}Starting existing Open WebUI container...${NC}"
         docker start open-webui
     fi
 else
     log "${BLUE}Installing Open WebUI...${NC}"
-    LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
-    docker run -d \
-        --name open-webui \
-        --restart always \
-        -p 3000:8080 \
-        -e OLLAMA_API_BASE_URL="http://${LOCAL_IP:-localhost}:11434/api" \
-        -v open-webui:/app/backend/data \
-        ghcr.io/open-webui/open-webui:main
+    run_webui
 fi
 
 # Check Open WebUI status and provide access instructions
