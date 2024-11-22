@@ -151,16 +151,20 @@ run_webui() {
     docker run -d \
         --name "$container_name" \
         --restart always \
-        --network host \
-        -e OLLAMA_API_BASE_URL="$desired_url" \
+        --add-host=host.docker.internal:host-gateway \
+        -p 3000:8080 \
+        -e OLLAMA_API_BASE_URL="http://host.docker.internal:11434/api" \
         -v open-webui:/app/backend/data \
         ghcr.io/open-webui/open-webui:main
 
-    # Wait for container to be ready
+    # Wait for container to be ready and verify API connection
     for i in {1..15}; do
         if docker logs "$container_name" 2>&1 | grep -q "Application startup complete" && \
            curl -s "http://localhost:3000" >/dev/null 2>&1; then
-            return 0
+            # Verify API connection from inside container
+            if docker exec "$container_name" curl -s http://host.docker.internal:11434/api/version >/dev/null; then
+                return 0
+            fi
         fi
         sleep 2
     done
@@ -171,7 +175,7 @@ run_webui() {
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
-    DESIRED_URL="http://localhost:11434/api"
+    DESIRED_URL="http://host.docker.internal:11434/api"
     
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
         log "${BLUE}Recreating container with updated configuration...${NC}"
