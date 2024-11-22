@@ -35,6 +35,7 @@ Wants=network-online.target
 Type=simple
 User=$USER
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="OLLAMA_HOST=0.0.0.0"
 ExecStart=/usr/local/bin/ollama serve
 WorkingDirectory=/home/$USER
 Restart=always
@@ -118,8 +119,7 @@ run_webui() {
     docker run -d \
         --name "$container_name" \
         --restart always \
-        --add-host=host.docker.internal:host-gateway \
-        -p 3000:8080 \
+        --network host \
         -e OLLAMA_API_BASE_URL="$desired_url" \
         -v open-webui:/app/backend/data \
         ghcr.io/open-webui/open-webui:main
@@ -138,7 +138,7 @@ run_webui() {
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
     CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
-    DESIRED_URL="http://host.docker.internal:11434/api"
+    DESIRED_URL="http://localhost:11434/api"
     
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
         log "${BLUE}Creating new container with updated configuration...${NC}"
@@ -157,7 +157,7 @@ if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     fi
 else
     log "${BLUE}Installing Open WebUI...${NC}"
-    run_webui "http://host.docker.internal:11434/api" "open-webui"
+    run_webui "http://localhost:11434/api" "open-webui"
 fi
 
 # Check Open WebUI status and provide access instructions
