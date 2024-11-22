@@ -134,26 +134,31 @@ run_webui() {
     # Remove existing container if it exists
     docker rm -f "$container_name" >/dev/null 2>&1
     
+    # Get host IP for container to use
+    HOST_IP=$(ip -4 addr show docker0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    if [ -z "$HOST_IP" ]; then
+        HOST_IP=$(ip route get 1 | awk '{print $7}' | head -n 1)
+    fi
+    
     # Wait for Ollama API to be accessible
     for i in {1..10}; do
-        if curl -s "$desired_url/version" >/dev/null; then
+        if curl -s "http://${HOST_IP}:11434/api/version" >/dev/null; then
             break
         fi
         sleep 2
     done
 
     # Only proceed if API is accessible
-    if ! curl -s "$desired_url/version" >/dev/null; then
-        log "${RED}Ollama API not accessible at $desired_url${NC}"
+    if ! curl -s "http://${HOST_IP}:11434/api/version" >/dev/null; then
+        log "${RED}Ollama API not accessible at http://${HOST_IP}:11434/api${NC}"
         return 1
     fi
     
     docker run -d \
         --name "$container_name" \
         --restart always \
-        --add-host=host.docker.internal:host-gateway \
         -p 3000:8080 \
-        -e OLLAMA_API_BASE_URL="http://host.docker.internal:11434/api" \
+        -e OLLAMA_API_BASE_URL="http://${HOST_IP}:11434/api" \
         -v open-webui:/app/backend/data \
         ghcr.io/open-webui/open-webui:main
 
@@ -162,7 +167,7 @@ run_webui() {
         if docker logs "$container_name" 2>&1 | grep -q "Application startup complete" && \
            curl -s "http://localhost:3000" >/dev/null 2>&1; then
             # Verify API connection from inside container
-            if docker exec "$container_name" curl -s http://host.docker.internal:11434/api/version >/dev/null; then
+            if docker exec "$container_name" curl -s "http://${HOST_IP}:11434/api/version" >/dev/null; then
                 return 0
             fi
         fi
@@ -174,8 +179,11 @@ run_webui() {
 # Update container check section
 if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI container exists${NC}"
-    CURRENT_URL=$(docker inspect open-webui | grep -o 'OLLAMA_API_BASE_URL=[^,]*' || echo '')
-    DESIRED_URL="http://host.docker.internal:11434/api"
+    HOST_IP=$(ip -4 addr show docker0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    if [ -z "$HOST_IP" ]; then
+        HOST_IP=$(ip route get 1 | awk '{print $7}' | head -n 1)
+    fi
+    DESIRED_URL="http://${HOST_IP}:11434/api"
     
     if [[ "$CURRENT_URL" != *"$DESIRED_URL"* ]]; then
         log "${BLUE}Recreating container with updated configuration...${NC}"
