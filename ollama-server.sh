@@ -141,10 +141,19 @@ else
         ghcr.io/open-webui/open-webui:main
 fi
 
-# Check Open WebUI status
+# Check Open WebUI status and provide access instructions
 if docker ps --format '{{.Names}}' | grep -q '^open-webui$'; then
     log "${GREEN}Open WebUI is running successfully${NC}"
-    log "${GREEN}Web interface available at http://localhost:3000${NC}"
+    
+    # Check if running in SSH session
+    if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+        LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+        log "${GREEN}To access Open WebUI from your local machine, run:${NC}"
+        log "${BLUE}ssh -L 3000:localhost:3000 $(whoami)@$LOCAL_IP${NC}"
+        log "${GREEN}Then open http://localhost:3000 in your browser${NC}"
+    else
+        log "${GREEN}Web interface available at http://localhost:3000${NC}"
+    fi
 else
     log "${RED}Failed to start Open WebUI container. Check logs with: docker logs open-webui${NC}"
 fi
