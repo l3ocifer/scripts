@@ -144,7 +144,7 @@ deploy_webui() {
         PORT_MAPPING="-p 3000:8080"
         WEBUI_PORT="3000"
     else
-        OLLAMA_HOST="localhost"
+        OLLAMA_HOST="127.0.0.1"
         EXTRA_ARGS="--network host"
         WEBUI_PORT="8080"
     fi
@@ -155,23 +155,10 @@ deploy_webui() {
         -e AIOHTTP_CLIENT_TIMEOUT=300 \
         -e OLLAMA_ORIGINS=* \
         -e TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC") \
-        -e RESET_CONFIG_ON_START=true \
         -e OLLAMA_MODELS_PATH=/root/.ollama/models \
-        -e OLLAMA_TIMEOUT=300 \
-        -e DEFAULT_MODEL=internlm2 \
-        -e OLLAMA_MODEL_LIST=internlm2"
+        -e OLLAMA_TIMEOUT=300"
     
-    # Update model verification check
-    verify_webui_model_access() {
-        for i in {1..5}; do
-            if curl -s "http://localhost:${WEBUI_PORT}/api/v1/models" | grep -q "internlm2"; then
-                return 0
-            fi
-            sleep 2
-        done
-        return 1
-    }
-    
+    # Deploy container
     if ! docker run -d \
         --name open-webui \
         --restart always \
@@ -188,22 +175,22 @@ deploy_webui() {
         return 1
     fi
     
-    # Wait for WebUI to be ready
+    # Wait for WebUI to be ready with improved verification
     for i in {1..15}; do
         if curl -s "http://localhost:${WEBUI_PORT}" >/dev/null; then
             log "${GREEN}Open WebUI is ready${NC}"
-            if verify_webui_model_access; then
+            # Give extra time for API to initialize
+            sleep 10
+            if curl -s "http://localhost:${WEBUI_PORT}/api/v1/models" | grep -q "internlm2"; then
                 log "${GREEN}Models are accessible in WebUI${NC}"
                 return 0
-            else
-                log "${RED}Models not accessible in WebUI. Check Ollama API connection${NC}"
-                return 1
             fi
         fi
         log "${YELLOW}Waiting for Open WebUI to start (attempt $i/15)...${NC}"
         sleep 2
     done
-    log "${RED}Open WebUI failed to respond after 30 seconds${NC}"
+    
+    log "${RED}Models not accessible in WebUI. Check Ollama API connection${NC}"
     return 1
 }
 
@@ -252,25 +239,23 @@ verify_model_installation() {
         return 0
     fi
     
-    # Try to load the model
+    # Try to load the model with increased timeout
     log "${BLUE}Loading model $model...${NC}"
-    if ! timeout 120 ollama run $model "test" >/dev/null 2>&1; then
+    if ! timeout 300 ollama run $model "test" >/dev/null 2>&1; then
         log "${YELLOW}Initial load failed, attempting alternative load method...${NC}"
-        # Try alternative loading method with explicit parameters
-        if ! timeout 120 curl -s "http://localhost:11434/api/generate" -d "{\"model\":\"$model\",\"prompt\":\"test\",\"stream\":false}" >/dev/null; then
+        if ! curl -s -m 300 "http://localhost:11434/api/generate" -d "{\"model\":\"$model\",\"prompt\":\"test\",\"stream\":false}" >/dev/null; then
             log "${RED}Failed to load model $model${NC}"
             return 1
         fi
     fi
     
-    # Verify model is now running
-    for i in {1..5}; do
-        if ollama ps | grep -q "^$model" && \
-           curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" | grep -q "\"status\":\"ready\""; then
-            log "${GREEN}Model $model is loaded and running${NC}"
+    # Wait longer for model to be ready
+    for i in {1..10}; do
+        if curl -s "http://localhost:11434/api/show" -d "{\"name\":\"$model\"}" | grep -q "\"status\":\"ready\""; then
+            log "${GREEN}Model $model is loaded and ready${NC}"
             return 0
         fi
-        sleep 5
+        sleep 10
     done
     
     log "${RED}Model $model failed to start properly${NC}"
