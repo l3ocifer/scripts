@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "../.aws"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../.ssh"
+		},
+		{
+			"path": "../.dotfiles"
+		},
+		{
+			"path": "../.kube"
+		}
+	]
+}

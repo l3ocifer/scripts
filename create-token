@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""
+Global Token Creation Script
+Creates a complete token website with Solana integration and AWS deployment.
+
+Usage: token <TOKEN_SYMBOL> <DOMAIN_NAME>
+Example: token MOON moon.finance
+"""
+
+import os
+import sys
+import subprocess
+import json
+import logging
+import shutil
+import tempfile
+from pathlib import Path
+import urllib.request
+import urllib.error
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
+
+# Template repository URL
+TEMPLATE_REPO = "https://github.com/l3ocifer/sol-token.git"  # Update with your actual repo
+TEMPLATE_DIR = os.path.expanduser("~/.token-template")
+
+def print_banner():
+    """Print the token creation banner."""
+    print("""
+╔══════════════════════════════════════════════════════════════╗
+║                    🚀 TOKEN WEBSITE CREATOR                  ║
+║                                                              ║
+║  Creates a complete Solana token with AWS-hosted website    ║
+║  • SPL Token Creation                                        ║
+║  • Modern React Frontend                                     ║
+║  • Wallet Integration (Phantom, Solflare)                   ║
+║  • AWS S3 + CloudFront Hosting                              ║
+║  • SSL Certificate & Custom Domain                          ║
+╚══════════════════════════════════════════════════════════════╝
+    """)
+
+def check_requirements():
+    """Check if all required tools are installed."""
+    requirements = {
+        'git': 'git --version',
+        'rust': 'rustc --version',
+        'cargo': 'cargo --version',
+        'node': 'node --version',
+        'npm': 'npm --version',
+        'terraform': 'terraform --version',
+        'aws': 'aws --version',
+        'solana': 'solana --version'
+    }
+    
+    missing = []
+    for tool, command in requirements.items():
+        try:
+            subprocess.run(command.split(), capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            missing.append(tool)
+    
+    if missing:
+        print(f"❌ Missing required tools: {', '.join(missing)}")
+        print("\nPlease install the missing tools:")
+        for tool in missing:
+            if tool == 'rust':
+                print("  • Rust: https://rustup.rs/")
+            elif tool == 'node':
+                print("  • Node.js: https://nodejs.org/")
+            elif tool == 'terraform':
+                print("  • Terraform: https://terraform.io/downloads")
+            elif tool == 'aws':
+                print("  • AWS CLI: https://aws.amazon.com/cli/")
+            elif tool == 'solana':
+                print("  • Solana CLI: https://docs.solana.com/cli/install-solana-cli-tools")
+        sys.exit(1)
+    
+    print("✅ All required tools are installed")
+
+def check_credentials():
+    """Check if required credentials are configured."""
+    missing_creds = []
+    
+    # Check AWS credentials
+    try:
+        subprocess.run(['aws', 'sts', 'get-caller-identity'], 
+                      capture_output=True, check=True)
+    except subprocess.CalledProcessError:
+        missing_creds.append("AWS credentials")
+    
+    # Check GitHub token
+    if not os.getenv('GITHUB_ACCESS_TOKEN'):
+        missing_creds.append("GITHUB_ACCESS_TOKEN")
+    
+    if missing_creds:
+        print(f"❌ Missing credentials: {', '.join(missing_creds)}")
+        print("\nPlease configure:")
+        if "AWS credentials" in missing_creds:
+            print("  • AWS: Run 'aws configure' or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY")
+        if "GITHUB_ACCESS_TOKEN" in missing_creds:
+            print("  • GitHub: Set GITHUB_ACCESS_TOKEN environment variable")
+        sys.exit(1)
+    
+    print("✅ All credentials are configured")
+
+def update_template():
+    """Update or clone the template repository."""
+    if os.path.exists(TEMPLATE_DIR):
+        print("🔄 Updating template repository...")
+        try:
+            subprocess.run(['git', 'pull'], cwd=TEMPLATE_DIR, check=True, capture_output=True)
+            print("✅ Template updated successfully")
+        except subprocess.CalledProcessError:
+            print("⚠️  Failed to update template, using existing version")
+    else:
+        print("📥 Cloning template repository...")
+        try:
+            subprocess.run(['git', 'clone', TEMPLATE_REPO, TEMPLATE_DIR], 
+                          check=True, capture_output=True)
+            print("✅ Template cloned successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to clone template: {e}")
+            sys.exit(1)
+
+def create_repo_name(token_symbol, domain_name):
+    """Create repository name from token symbol and domain."""
+    # Extract domain parts
+    domain_parts = domain_name.split('.')
+    if len(domain_parts) >= 2:
+        domain_part = domain_parts[0]
+        tld = '_'.join(domain_parts[1:])
+        return f"{token_symbol.upper()}-{domain_part}_{tld}"
+    else:
+        return f"{token_symbol.upper()}-{domain_name}"
+
+def create_github_repo(repo_name):
+    """Create GitHub repository."""
+    print(f"📝 Creating GitHub repository: {repo_name}")
+    
+    GITHUB_ACCESS_TOKEN = os.getenv('GITHUB_ACCESS_TOKEN')
+    api_url = 'https://api.github.com/user/repos'
+    headers = {
+        'Authorization': f'token {GITHUB_ACCESS_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    data = json.dumps({
+        'name': repo_name,
+        'private': True,
+        'description': f'Token website for {repo_name}',
+        'auto_init': False
+    }).encode('utf-8')
+    
+    req = urllib.request.Request(api_url, data=data, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(req) as response:
+            if response.status == 201:
+                print("✅ GitHub repository created")
+            else:
+                print(f"❌ Failed to create repository: {response.status}")
+                sys.exit(1)
+    except urllib.error.HTTPError as e:
+        if e.code == 422:
+            print("⚠️  Repository already exists, continuing...")
+        else:
+            print(f"❌ Failed to create repository: {e.code}")
+            sys.exit(1)
+
+def setup_project(repo_name, token_symbol, domain_name, token_name):
+    """Set up the project directory and configuration."""
+    project_dir = os.path.expanduser(f"~/git/tokens/{repo_name}")
+    
+    print(f"📁 Setting up project: {project_dir}")
+    
+    # Create project directory
+    os.makedirs(project_dir, exist_ok=True)
+    
+    # Copy template files
+    for item in os.listdir(TEMPLATE_DIR):
+        if item not in ['.git', '__pycache__', 'target', 'node_modules', '.env']:
+            src = os.path.join(TEMPLATE_DIR, item)
+            dst = os.path.join(project_dir, item)
+            if os.path.isdir(src):
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+    
+    # Initialize git repository
+    subprocess.run(['git', 'init'], cwd=project_dir, check=True)
+    
+    # Create environment configuration
+    env_content = f"""# Token Website Configuration
+# Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+# Domain Configuration
+DOMAIN_NAME={domain_name}
+REPO_NAME={repo_name}
+
+# Token Information
+TOKEN_NAME={token_name}
+TOKEN_SYMBOL={token_symbol}
+TOKEN_DECIMALS=9
+INITIAL_SUPPLY=1000000000
+TOKEN_DESCRIPTION={token_name} - A revolutionary token on Solana
+
+# Solana Configuration
+RPC_URL=https://api.devnet.solana.com
+SIGNER_KEYPAIR_PATH=./keypairs/payer.json
+
+# Pinata Configuration (for metadata storage)
+PINATA_JWT={os.getenv('PINATA_JWT', '')}
+
+# AWS Configuration
+AWS_ACCESS_KEY_ID={os.getenv('AWS_ACCESS_KEY_ID', '')}
+AWS_SECRET_ACCESS_KEY={os.getenv('AWS_SECRET_ACCESS_KEY', '')}
+AWS_DEFAULT_REGION=us-east-1
+
+# GitHub Configuration
+GITHUB_ACCESS_TOKEN={os.getenv('GITHUB_ACCESS_TOKEN', '')}
+"""
+    
+    with open(os.path.join(project_dir, '.env'), 'w') as f:
+        f.write(env_content)
+    
+    # Create website configuration
+    website_config = {
+        "domain": domain_name,
+        "token": {
+            "name": token_name,
+            "symbol": token_symbol,
+            "description": f"{token_name} - A revolutionary token on Solana",
+            "decimals": 9,
+            "initial_supply": 1000000000
+        },
+        "features": {
+            "wallet_connection": True,
+            "token_purchase": True,
+            "token_info_display": True,
+            "social_links": {}
+        }
+    }
+    
+    with open(os.path.join(project_dir, 'website-config.json'), 'w') as f:
+        json.dump(website_config, f, indent=2)
+    
+    # Set up git remote
+    origin_url = f'git@github.com:l3ocifer/{repo_name}.git'
+    subprocess.run(['git', 'remote', 'add', 'origin', origin_url], cwd=project_dir, check=True)
+    
+    print("✅ Project setup complete")
+    return project_dir
+
+def create_admin_wallet(project_dir):
+    """Create admin wallet for the token."""
+    print("👤 Creating admin wallet...")
+    
+    keypairs_dir = os.path.join(project_dir, 'keypairs')
+    os.makedirs(keypairs_dir, exist_ok=True)
+    
+    payer_keypair = os.path.join(keypairs_dir, 'payer.json')
+    
+    # Generate keypair
+    subprocess.run(['solana-keygen', 'new', '--outfile', payer_keypair, '--no-bip39-passphrase'], 
+                  check=True, input='\n', text=True)
+    
+    # Get wallet address
+    result = subprocess.run(['solana-keygen', 'pubkey', payer_keypair], 
+                           capture_output=True, text=True, check=True)
+    wallet_address = result.stdout.strip()
+    
+    # Fund wallet on devnet
+    print("💰 Funding wallet on devnet...")
+    subprocess.run(['solana', 'airdrop', '2', wallet_address, '--url', 'devnet'], 
+                  check=True)
+    
+    print(f"✅ Admin wallet created: {wallet_address}")
+    return wallet_address
+
+def deploy_project(project_dir):
+    """Deploy the complete project."""
+    print("🚀 Deploying project...")
+    
+    # Change to project directory
+    original_dir = os.getcwd()
+    os.chdir(project_dir)
+    
+    try:
+        # Run deployment script
+        subprocess.run(['python3', 'deploy-website.py'], check=True)
+        print("✅ Project deployed successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Deployment failed: {e}")
+        return False
+    finally:
+        os.chdir(original_dir)
+    
+    return True
+
+def display_results(repo_name, domain_name, wallet_address, project_dir):
+    """Display final results and information."""
+    print(f"""
+╔══════════════════════════════════════════════════════════════╗
+║                    🎉 DEPLOYMENT COMPLETE!                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+🌐 Website URL: https://{domain_name}
+📁 Project Directory: {project_dir}
+👤 Admin Wallet: {wallet_address}
+📦 GitHub Repository: https://github.com/l3ocifer/{repo_name}
+
+📋 NEXT STEPS:
+1. Visit your website: https://{domain_name}
+2. Test wallet connection and token purchase
+3. Configure social links in website-config.json
+4. Add token logo to frontend/public/
+5. Update token description and branding
+
+⚠️  IMPORTANT:
+• Backup your admin wallet keypair: {project_dir}/keypairs/payer.json
+• This is currently deployed on Solana DEVNET
+• For mainnet deployment, update RPC_URL in .env file
+
+🔧 MANAGE YOUR TOKEN:
+cd {project_dir}
+python3 deploy-website.py  # Redeploy after changes
+""")
+
+def main():
+    """Main function for token creation."""
+    print_banner()
+    
+    # Parse arguments
+    if len(sys.argv) != 3:
+        print("Usage: token <TOKEN_SYMBOL> <DOMAIN_NAME>")
+        print("Example: token MOON moon.finance")
+        sys.exit(1)
+    
+    token_symbol = sys.argv[1].upper()
+    domain_name = sys.argv[2].lower()
+    token_name = input(f"Enter full token name (default: {token_symbol} Token): ").strip() or f"{token_symbol} Token"
+    
+    print(f"Creating token: {token_name} ({token_symbol})")
+    print(f"Domain: {domain_name}")
+    print()
+    
+    # Check requirements and credentials
+    check_requirements()
+    check_credentials()
+    
+    # Update template
+    update_template()
+    
+    # Create repository name
+    repo_name = create_repo_name(token_symbol, domain_name)
+    
+    # Create GitHub repository
+    create_github_repo(repo_name)
+    
+    # Set up project
+    project_dir = setup_project(repo_name, token_symbol, domain_name, token_name)
+    
+    # Create admin wallet
+    wallet_address = create_admin_wallet(project_dir)
+    
+    # Deploy project
+    if deploy_project(project_dir):
+        display_results(repo_name, domain_name, wallet_address, project_dir)
+    else:
+        print("❌ Deployment failed. Check the logs above for details.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -48,17 +48,28 @@ get_or_set_last_domain() {
 get_or_set_last_domain
 echo "$DOMAIN_NAME" > .domain
 REPO_NAME=$(echo "$DOMAIN_NAME" | sed -E 's/\.[^.]+$//')
-REPO_PATH="$HOME/git/$REPO_NAME"
+# Create websites directory if it doesn't exist
+mkdir -p "$HOME/git/websites"
+REPO_PATH="$HOME/git/websites/$REPO_NAME"
 
 setup_or_update_repo() {
-    local default_repo="https://github.com/$GITHUB_USERNAME/website.git"
+    local default_repo="https://github.com/$GITHUB_USERNAME/aws-s3-cdn-acm-website.git"
     local target_repo="https://$GITHUB_ACCESS_TOKEN@github.com/$GITHUB_USERNAME/$REPO_NAME.git"
 
     if [ -d "$REPO_PATH" ]; then
         echo "Repository already exists. Updating..."
         cd "$REPO_PATH"
-        git fetch origin
-        git reset --hard origin/master || git reset --hard origin/main
+        
+        # Check if origin remote exists and fetch if it does
+        if git remote get-url origin &>/dev/null; then
+            git fetch origin 2>/dev/null || true
+            git reset --hard origin/master 2>/dev/null || git reset --hard origin/main 2>/dev/null || true
+        fi
+        
+        # Ensure default remote exists for template updates
+        if ! git remote get-url default &>/dev/null; then
+            git remote add default "$default_repo" 2>/dev/null || true
+        fi
     else
         echo "Cloning website template repository..."
         git clone "$default_repo" "$REPO_PATH"
@@ -67,27 +78,40 @@ setup_or_update_repo() {
     fi
 
     # Ensure we have the latest changes from the default repo
-    git fetch default
-    git checkout -B master default/master || git checkout -B main default/main
+    git fetch default 2>/dev/null || true
+    git checkout -B master default/master 2>/dev/null || git checkout -B main default/main 2>/dev/null || true
 
     # Make scripts executable
-    chmod +x scripts/*.sh
+    if [ -d "scripts" ]; then
+        chmod +x scripts/*.sh 2>/dev/null || true
+    fi
 
     # Update domain-specific files
     echo "$DOMAIN_NAME" > .domain
-    sed -i.bak "s/REPO_NAME_PLACEHOLDER/$REPO_NAME/g" terraform/backend.tf
-    rm -f terraform/backend.tf.bak
-    cp .domain terraform/
+    if [ -f "terraform/backend.tf" ]; then
+        sed -i.bak "s/REPO_NAME_PLACEHOLDER/$REPO_NAME/g" terraform/backend.tf
+        rm -f terraform/backend.tf.bak
+    fi
+    if [ -d "terraform" ]; then
+        cp .domain terraform/ 2>/dev/null || true
+    fi
 
-    # Create or get hosted zone ID
-    source ./scripts/setup_aws.sh
-    create_or_get_hosted_zone
+    # Create or get hosted zone ID (if setup script exists)
+    # Note: AWS setup is typically handled by Python scripts in main.sh
+    if [ -f "./scripts/setup_aws.sh" ]; then
+        source ./scripts/setup_aws.sh
+        create_or_get_hosted_zone
+    elif [ -f "./scripts/setup_aws.py" ]; then
+        echo "Note: AWS setup will be handled by Python scripts in main.sh"
+    else
+        echo "Note: AWS setup will be handled by main.sh script"
+    fi
 
-    # Ensure .hosted_zone_id is in the repo root
+    # Ensure .hosted_zone_id is in the repo root (if it exists)
     if [ -f .hosted_zone_id ]; then
         cp .hosted_zone_id "$REPO_PATH/" 2>/dev/null || true
     else
-        echo "Warning: .hosted_zone_id file not found after create_or_get_hosted_zone"
+        echo "Note: .hosted_zone_id will be created by main.sh if needed"
     fi
 
     # Commit changes
@@ -102,20 +126,114 @@ setup_or_update_repo() {
 
     # Set up the new origin
     git remote remove origin 2>/dev/null || true
-    git remote add origin "$target_repo"
+    git remote add origin "$target_repo" 2>/dev/null || {
+        echo "Warning: Could not add origin remote. It may already exist."
+        git remote set-url origin "$target_repo" 2>/dev/null || true
+    }
 
+    # Determine current branch name
+    current_branch=$(git branch --show-current 2>/dev/null || echo "master")
+    
     # Push changes
     echo "Pushing changes to GitHub..."
-    git push -u origin master --force || git push -u origin main --force
+    git push -u origin "$current_branch" --force 2>/dev/null || {
+        echo "Warning: Push failed. Attempting to push to master/main..."
+        git push -u origin master --force 2>/dev/null || git push -u origin main --force 2>/dev/null || true
+    }
 }
 
 setup_or_update_repo
 
 # Run the main setup script
-if [ -f "scripts/main.sh" ]; then
+# The template uses Python scripts (scripts/main.py), not shell scripts
+# Ensure we're in the repo directory
+if [ -d "$REPO_PATH" ]; then
+    cd "$REPO_PATH"
+else
+    echo "Error: Repository path $REPO_PATH does not exist." >&2
+    exit 1
+fi
+
+# Set environment variables for Python scripts
+export DOMAIN_NAME="$DOMAIN_NAME"
+export REPO_NAME="$REPO_NAME"
+# Handle PYTHONPATH safely (may be unset)
+if [ -z "${PYTHONPATH:-}" ]; then
+    export PYTHONPATH="$REPO_PATH/scripts"
+else
+    export PYTHONPATH="$REPO_PATH/scripts:$PYTHONPATH"
+fi
+
+if [ -f "scripts/main.py" ]; then
+    echo "Running scripts/main.py..."
+    
+    # Create a virtual environment for this project (similar to create-website.py)
+    VENV_PATH="$REPO_PATH/.venv"
+    CLEANUP_VENV=1
+    
+    # Cleanup function for venv
+    cleanup_venv() {
+        if [ "$CLEANUP_VENV" -eq 1 ] && [ -d "$VENV_PATH" ]; then
+            echo "Cleaning up virtual environment..."
+            rm -rf "$VENV_PATH"
+        fi
+    }
+    
+    # Set up trap to cleanup on exit (including failures)
+    trap cleanup_venv EXIT INT TERM
+    
+    # Create venv if it doesn't exist
+    if [ ! -d "$VENV_PATH" ]; then
+        echo "Creating virtual environment..."
+        python3 -m venv "$VENV_PATH" || {
+            echo "Error: Failed to create virtual environment." >&2
+            exit 1
+        }
+    fi
+    
+    # Activate the virtual environment
+    source "$VENV_PATH/bin/activate" || {
+        echo "Error: Failed to activate virtual environment." >&2
+        exit 1
+    }
+    
+    # Install dependencies in the venv
+    echo "Installing Python dependencies in virtual environment..."
+    pip install --upgrade pip --quiet || {
+        echo "Warning: Failed to upgrade pip, continuing anyway..."
+    }
+    pip install boto3 botocore requests python-dotenv || {
+        echo "Error: Failed to install Python dependencies." >&2
+        exit 1
+    }
+    
+    # Verify installation
+    if ! python -c "import boto3" 2>/dev/null; then
+        echo "Error: Dependencies installed but boto3 still not importable." >&2
+        exit 1
+    fi
+    
+    # Run the main script
+    python -m scripts.main
+    EXIT_CODE=$?
+    
+    # If we get here successfully, don't cleanup the venv (keep it for future use)
+    if [ $EXIT_CODE -eq 0 ]; then
+        CLEANUP_VENV=0
+        trap - EXIT INT TERM
+        echo "Virtual environment preserved at $VENV_PATH for future use"
+    else
+        exit $EXIT_CODE
+    fi
+elif [ -f "create-website.py" ]; then
+    echo "Running create-website.py..."
+    python3 create-website.py
+elif [ -f "scripts/main.sh" ]; then
     ./scripts/main.sh
 else
-    echo "Error: main.sh not found in the scripts directory." >&2
+    echo "Error: No main setup script found (scripts/main.py, create-website.py, or scripts/main.sh)." >&2
+    echo "Available files in scripts directory:" >&2
+    ls -la scripts/ >&2 || true
     exit 1
 fi
 
