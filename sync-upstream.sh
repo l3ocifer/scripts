@@ -86,7 +86,7 @@ ahead=$(git rev-list --count "upstream/$upstream_branch..$target_branch" 2>/dev/
 log "$target_branch is behind upstream/$upstream_branch by ${behind:-?} (our custom commits ahead: ${ahead:-?})"
 if [[ "${behind:-0}" == "0" ]]; then
   log "already up to date with upstream — nothing to merge."
-  [[ $do_push -eq 1 ]] && { log "pushing to keep remotes current…"; run push origin "$target_branch" 2>/dev/null || true; run push github "$target_branch" 2>/dev/null || true; }
+  [[ $do_push -eq 1 ]] && { log "pushing to keep origin current…"; run push origin "$target_branch" 2>/dev/null || true; }
   exit 0
 fi
 
@@ -95,11 +95,7 @@ if git merge --no-edit "upstream/$upstream_branch"; then
   log "merged cleanly -> $(git rev-parse --short HEAD)"
   if [[ $do_push -eq 1 ]]; then
     run push origin "$target_branch" || { err "push to origin failed"; exit 1; }
-    log "pushed to origin (Forgejo)"
-    if git remote get-url github >/dev/null 2>&1; then
-      run push github "$target_branch" 2>/dev/null && log "mirrored to github backup" \
-        || log "github not updated (Forgejo push-mirror will sync it)"
-    fi
+    log "pushed to origin (Forgejo; its push mirror updates GitHub)"
   fi
   log "done"
 else

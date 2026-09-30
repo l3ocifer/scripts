@@ -6,8 +6,9 @@
 # `origin` is always correct:
 #   - forgejo-primary repos  -> origin = Forgejo; Forgejo push-mirrors to GitHub.
 #   - legacy github repos    -> origin = GitHub.
-# If a separate `github` remote exists alongside a Forgejo origin we also push
-# it best-effort so the backup is immediately current (non-fatal on failure).
+# A `github` remote next to a Forgejo origin is never pushed: the push mirror
+# updates it within seconds (sync_on_commit), and a direct push would just be
+# force-pushed over. If origin is down, the commit stays local; re-run later.
 #
 # Usage:
 #   commit                 # prompt for message (default "updated")
@@ -71,24 +72,11 @@ if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
     log "origin already up to date"
   else
     log "pushing to origin ($branch)"
-    run_push push origin "$branch" || { err "push to origin failed"; exit 1; }
+    run_push push origin "$branch" || { err "push to origin failed; commit kept locally"; exit 1; }
   fi
 else
   log "no upstream set; pushing -u origin $branch"
-  run_push push -u origin "$branch" || { err "push to origin failed"; exit 1; }
-fi
-
-# Best-effort: keep an explicit GitHub backup remote current if one exists and
-# origin is NOT already GitHub (otherwise it's the same push).
-if git remote get-url github >/dev/null 2>&1; then
-  origin_url=$(git remote get-url origin 2>/dev/null)
-  if [[ "$origin_url" != *github.com* ]]; then
-    if run_push push github "$branch" 2>/dev/null; then
-      log "mirrored to github backup remote"
-    else
-      log "github backup remote not updated (Forgejo push-mirror will sync it)"
-    fi
-  fi
+  run_push push -u origin "$branch" || { err "push to origin failed; commit kept locally"; exit 1; }
 fi
 
 log "done"

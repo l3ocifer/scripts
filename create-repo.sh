@@ -4,8 +4,10 @@
 # Defaults to Forgejo as the central origin + GitHub as a backup/mirror:
 # Forgejo is `origin`, GitHub is the `github` remote, and Forgejo is configured
 # to push-mirror to GitHub on every commit. Requires FORGEJO_TOKEN (env or a
-# 'Forgejo API Token (leo)' Vaultwarden login); without it, falls back to
-# GitHub-primary with a warning. Use --no-forgejo or --github-primary to opt out.
+# 'Forgejo API Token (leo)' Vaultwarden login); without it, it stops rather
+# than creating a GitHub-primary repo. Use --no-forgejo or --github-primary to
+# opt out explicitly (legacy). GitHub Actions is turned off on every new GitHub
+# copy: Forgejo Actions is the only CI (homelab docs/github-footprint.md).
 #
 # Interactive by default; pass flags or --yes for scripted/agent use.
 #
@@ -226,13 +228,9 @@ if [[ $forgejo -eq 1 ]]; then
     fi
   fi
   if [[ -z "${FORGEJO_TOKEN:-}" ]]; then
-    if [[ $github -eq 1 ]]; then
-      warn "FORGEJO_TOKEN not set (and not in unlocked Vaultwarden) — falling back to GitHub-primary."
-      warn "Set FORGEJO_TOKEN (or add a 'Forgejo API Token (leo)' Vaultwarden login) to make Forgejo central."
-      forgejo=0; forgejo_primary=0
-    else
-      err "FORGEJO_TOKEN required for Forgejo creation (no --no-forgejo and --no-github given)"; exit 1
-    fi
+    err "FORGEJO_TOKEN not set (and not in unlocked Vaultwarden). Forgejo is the origin for new repos:"
+    err "source ~/.zshrc (or unlock Vaultwarden) and re-run; --github-primary only for legacy cases."
+    exit 1
   else
     fj_slug="$FORGEJO_OWNER/$name"
   fi
@@ -400,6 +398,12 @@ if [[ $push -eq 1 ]]; then
       [[ -n "$description" ]] && gh_args+=( "--description" "$description" )
       gh repo create "${gh_args[@]}" >/dev/null
       log "github" "created https://github.com/$gh_slug"
+    fi
+    # The GitHub copy is a mirror (or legacy origin); Forgejo Actions is the CI.
+    if gh api -X PUT "repos/$gh_slug/actions/permissions" -F enabled=false >/dev/null 2>&1; then
+      log "github" "GitHub Actions disabled on $gh_slug"
+    else
+      warn "could not disable GitHub Actions on $gh_slug (do it in repo Settings -> Actions)"
     fi
   fi
 
